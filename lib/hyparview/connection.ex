@@ -72,6 +72,19 @@ defmodule HyParView.Connection do
   @spec send_message(pid(), HyParView.Messages.t()) :: :ok | {:error, term()}
   def send_message(pid, message), do: :gen_statem.call(pid, {:send, message})
 
+  @doc """
+  For inbound connections only: tells the Connection that socket
+  ownership has been transferred to it and it can start receiving.
+
+  Splits the socket-ownership transfer (Transport's `controlling_process`)
+  from the active-mode setup that needs to happen *after* the transfer.
+  Without this two-phase handshake, `:inet.setopts/2` from `init/1`
+  races with `controlling_process/2` and fails with `:badarg` under
+  load (multiple inbound connections handshaking concurrently).
+  """
+  @spec start_receiving(pid()) :: :ok | {:error, term()}
+  def start_receiving(pid), do: :gen_statem.call(pid, :start_receiving)
+
   # ── gen_statem callbacks ────────────────────────────────────────────
 
   @impl :gen_statem
@@ -89,7 +102,11 @@ defmodule HyParView.Connection do
 
       :inbound ->
         socket = Keyword.fetch!(opts, :socket)
-        :ok = :inet.setopts(socket, active: :once)
+        # Ownership of `socket` is still with the Transport at this point.
+        # We can't call `:inet.setopts(socket, active: :once)` here without
+        # racing against the Transport's `:gen_tcp.controlling_process/2`.
+        # `start_receiving/1` handles the active-mode setup once ownership
+        # has settled.
         {:ok, :handshaking, %{data | socket: socket}}
     end
   end
@@ -154,6 +171,16 @@ defmodule HyParView.Connection do
 
   def handshaking(:info, {:tcp_error, sock, reason}, %__MODULE__{socket: sock}) do
     {:stop, {:shutdown, {:tcp_error, reason}}}
+  end
+
+  def handshaking({:call, from}, :start_receiving, %__MODULE__{socket: sock} = data) do
+    case :inet.setopts(sock, active: :once) do
+      :ok ->
+        {:keep_state, data, [{:reply, from, :ok}]}
+
+      {:error, _} = err ->
+        {:stop_and_reply, {:shutdown, :setopts_failed}, [{:reply, from, err}], data}
+    end
   end
 
   def handshaking({:call, _from}, {:send, _msg}, _data) do

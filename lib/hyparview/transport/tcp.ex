@@ -136,7 +136,14 @@ defmodule HyParView.Transport.TCP do
            transport: self()
          ) do
       {:ok, conn_pid} ->
+        # Transfer the socket BEFORE telling Connection it can start
+        # `setopts`-ing. The two-phase dance avoids a race where
+        # Connection's `init/1` would touch the socket before this
+        # transfer landed (manifesting as `controlling_process/2`
+        # returning `{:error, :badarg}` because Connection died from a
+        # `:setopts_failed` shutdown).
         :ok = :gen_tcp.controlling_process(socket, conn_pid)
+        :ok = Connection.start_receiving(conn_pid)
         ref = Process.monitor(conn_pid)
         {:noreply, %{state | pids_to_id: Map.put(state.pids_to_id, ref, conn_pid)}}
 
