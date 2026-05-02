@@ -1,0 +1,28 @@
+# Build artifacts
+/_build/
+/cover/
+/deps/
+/doc/
+erl_crash.dump
+*.ez
+
+# Dialyzer
+/priv/plts/
+*.plt
+*.plt.hash
+
+# Hex package
+hyparview-*.tar
+
+# Editor / OS
+.DS_Store
+.elixir_ls/
+.vscode/
+.idea/
+
+# Local-only paper copy (not redistributed)
+*.pdf
+
+# Local secrets (none expected, but defensive)
+.env
+.env.local
