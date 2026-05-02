@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `HyParView.State.connection_lost/2`, so reactive recovery (NEIGHBOR to a
   passive peer) fires without applications having to call
   `HyParView.connection_lost/2` themselves.
+- `HyParView.subscribe/3` accepts a `:replay` option. When `replay: true`,
+  the server immediately sends `{:hyparview, {:peer_up, peer}}` for every
+  peer currently in the active view, before any future events. Useful for
+  late subscribers (e.g. integrations like `libcluster_hyparview` that
+  subscribe after the server has already JOINed).
 
 ## [0.1.0] — 2026-05-02
 

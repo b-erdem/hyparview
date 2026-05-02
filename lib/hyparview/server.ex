@@ -106,9 +106,19 @@ defmodule HyParView.Server do
   Subscribers receive `{:hyparview, {:peer_up | :peer_down, %Peer{}}}`
   on every change. The server monitors the subscriber and removes it
   on exit.
+
+  ## Options
+
+    * `:replay` — when `true`, the server immediately sends a
+      `{:hyparview, {:peer_up, peer}}` for every peer currently in the
+      active view, before any future events. Useful for late subscribers
+      that need a complete picture without an additional `active_view/1`
+      call. Defaults to `false`.
   """
-  @spec subscribe(GenServer.server(), pid()) :: :ok
-  def subscribe(server, pid \\ self()), do: GenServer.call(server, {:subscribe, pid})
+  @spec subscribe(GenServer.server(), pid(), keyword()) :: :ok
+  def subscribe(server, pid \\ self(), opts \\ []) do
+    GenServer.call(server, {:subscribe, pid, opts})
+  end
 
   @doc "Stop the server gracefully."
   @spec stop(GenServer.server()) :: :ok
@@ -230,8 +240,15 @@ defmodule HyParView.Server do
     {:reply, State.passive_peers(internal.state), internal}
   end
 
-  def handle_call({:subscribe, pid}, _from, internal) do
+  def handle_call({:subscribe, pid, opts}, _from, internal) do
     ref = Process.monitor(pid)
+
+    if Keyword.get(opts, :replay, false) do
+      for peer <- State.active_peers(internal.state) do
+        send(pid, {:hyparview, {:peer_up, peer}})
+      end
+    end
+
     {:reply, :ok, %{internal | subscribers: Map.put(internal.subscribers, ref, pid)}}
   end
 

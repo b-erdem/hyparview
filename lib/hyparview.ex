@@ -46,9 +46,9 @@ defmodule HyParView do
   @spec passive_view(GenServer.server()) :: [Peer.t()]
   defdelegate passive_view(server), to: Server
 
-  @doc "Subscribe to view-change notifications. See `HyParView.Server.subscribe/2`."
-  @spec subscribe(GenServer.server(), pid()) :: :ok
-  defdelegate subscribe(server, pid \\ self()), to: Server
+  @doc "Subscribe to view-change notifications. See `HyParView.Server.subscribe/3`."
+  @spec subscribe(GenServer.server(), pid(), keyword()) :: :ok
+  defdelegate subscribe(server, pid \\ self(), opts \\ []), to: Server
 
   @doc "Stop the server gracefully."
   @spec stop(GenServer.server()) :: :ok
