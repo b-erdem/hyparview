@@ -16,16 +16,23 @@ defmodule HyParView.Test.Cluster do
   alias HyParView.{Config, Peer, State}
 
   @enforce_keys [:nodes]
-  defstruct nodes: %{}, queue: nil, step_count: 0, dropped: 0
+  defstruct nodes: %{}, queue: nil, step_count: 0, dropped: 0, partition_filter: nil
 
   @type peer_id :: Peer.id()
   @type queued :: {peer_id(), HyParView.Messages.t()}
+
+  @typedoc """
+  Filter applied at message-enqueue time. Returns `:drop` to discard a
+  message, `:deliver` to enqueue it. `nil` means deliver everything.
+  """
+  @type partition_filter :: (peer_id(), peer_id() -> :drop | :deliver) | nil
 
   @type t :: %__MODULE__{
           nodes: %{peer_id() => State.t()},
           queue: :queue.queue(queued()),
           step_count: non_neg_integer(),
-          dropped: non_neg_integer()
+          dropped: non_neg_integer(),
+          partition_filter: partition_filter()
         }
 
   @doc """
@@ -63,7 +70,71 @@ defmodule HyParView.Test.Cluster do
     {joiner_state, actions} = State.initiate_join(joiner_state, contact_state.self)
 
     cluster = %{cluster | nodes: Map.put(cluster.nodes, joiner_id, joiner_state)}
-    apply_actions(cluster, actions)
+    apply_actions(cluster, joiner_id, actions)
+  end
+
+  @doc """
+  Install a partition filter that drops messages crossing between two
+  groups of node ids. Within each group, messages still flow normally.
+
+  Use `heal/1` to remove the filter.
+
+  ## Example
+
+      cluster = Cluster.partition(cluster, ["p1", "p2"], ["p3", "p4"])
+      # Messages from p1/p2 to p3/p4 (and back) are dropped.
+      cluster = Cluster.heal(cluster)
+  """
+  @spec partition(t(), [peer_id()], [peer_id()]) :: t()
+  def partition(%__MODULE__{} = cluster, group_a, group_b) do
+    a_set = MapSet.new(group_a)
+    b_set = MapSet.new(group_b)
+
+    filter = fn from_id, to_id ->
+      cond do
+        MapSet.member?(a_set, from_id) and MapSet.member?(b_set, to_id) -> :drop
+        MapSet.member?(b_set, from_id) and MapSet.member?(a_set, to_id) -> :drop
+        true -> :deliver
+      end
+    end
+
+    %{cluster | partition_filter: filter}
+  end
+
+  @doc "Remove any active partition filter; messages flow freely again."
+  @spec heal(t()) :: t()
+  def heal(%__MODULE__{} = cluster), do: %{cluster | partition_filter: nil}
+
+  @doc """
+  Trigger `connection_lost` on every node for any active peer in `dead_set`.
+
+  Use this after `partition/3` to simulate failure-detection of cross-half
+  peers (which the simulator otherwise wouldn't detect, since it has no
+  TCP). The resulting protocol-level repair runs as messages get delivered
+  via subsequent `step/1` calls.
+  """
+  @spec detect_lost(t(), [peer_id()]) :: t()
+  def detect_lost(%__MODULE__{} = cluster, dead_set) do
+    dead = MapSet.new(dead_set)
+
+    Enum.reduce(cluster.nodes, cluster, fn {node_id, state}, acc ->
+      detect_lost_for_node(acc, node_id, State.active_peers(state), dead)
+    end)
+  end
+
+  defp detect_lost_for_node(cluster, node_id, active_peers, dead) do
+    Enum.reduce(active_peers, cluster, fn peer, acc ->
+      if MapSet.member?(dead, peer.id),
+        do: trigger_loss(acc, node_id, peer),
+        else: acc
+    end)
+  end
+
+  defp trigger_loss(cluster, node_id, peer) do
+    current_state = Map.fetch!(cluster.nodes, node_id)
+    {new_state, actions} = State.connection_lost(current_state, peer)
+    cluster = %{cluster | nodes: Map.put(cluster.nodes, node_id, new_state)}
+    apply_actions(cluster, node_id, actions)
   end
 
   @doc """
@@ -90,7 +161,7 @@ defmodule HyParView.Test.Cluster do
           {:ok, state} ->
             {state, actions} = State.handle_message(state, msg)
             cluster = %{cluster | nodes: Map.put(cluster.nodes, to_id, state)}
-            {:ok, apply_actions(cluster, actions)}
+            {:ok, apply_actions(cluster, to_id, actions)}
         end
     end
   end
@@ -114,16 +185,26 @@ defmodule HyParView.Test.Cluster do
     end
   end
 
-  defp apply_actions(cluster, actions) do
+  defp apply_actions(cluster, sender_id, actions) do
     Enum.reduce(actions, cluster, fn
-      {:send, %Peer{id: id}, msg}, c -> enqueue(c, id, msg)
+      {:send, %Peer{id: to_id}, msg}, c -> enqueue(c, sender_id, to_id, msg)
       {:notify_up, _peer}, c -> c
       {:notify_down, _peer}, c -> c
     end)
   end
 
-  defp enqueue(%__MODULE__{queue: q} = cluster, to_id, msg) do
-    %{cluster | queue: :queue.in({to_id, msg}, q)}
+  defp enqueue(%__MODULE__{} = cluster, from_id, to_id, msg) do
+    drop? =
+      case cluster.partition_filter do
+        nil -> false
+        fun -> fun.(from_id, to_id) == :drop
+      end
+
+    if drop? do
+      %{cluster | dropped: cluster.dropped + 1}
+    else
+      %{cluster | queue: :queue.in({to_id, msg}, cluster.queue)}
+    end
   end
 
   @doc "Active peers (as `Peer.t()` lists) for every node in the cluster."

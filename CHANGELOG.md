@@ -26,6 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   late subscribers (e.g. integrations like `libcluster_hyparview` that
   subscribe after the server has already JOINed).
 
+### Tested
+
+- `HyParView.PartitionTest` — partition + heal tests (5 cases including
+  one StreamData property): bounds and disjointness invariants hold under
+  partition; the partition filter actually drops cross-half messages;
+  shuffle traffic resumes after heal; partition-then-heal cycles preserve
+  invariants across all seeds.
+- `HyParView.Test.Cluster` simulator extended with `partition/3`,
+  `heal/1`, and `detect_lost/2` for partition-style integration tests.
+
 ## [0.1.0] — 2026-05-02
 
 Initial release.
