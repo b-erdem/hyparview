@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   peer currently in the active view, before any future events. Useful for
   late subscribers (e.g. integrations like `libcluster_hyparview` that
   subscribe after the server has already JOINed).
+- `HyParView.Telemetry.Metrics` — pre-built `Telemetry.Metrics`
+  definitions for the events emitted by `HyParView.Server`. Drop them
+  into a `telemetry_metrics_prometheus` / `telemetry_metrics_statsd` /
+  any other reporter for instant observability. Optional dep on
+  `:telemetry_metrics ~> 1.0`.
 
 ### Tested
 

@@ -163,7 +163,7 @@ HyParView.start_link(
 ## Telemetry
 
 All view changes emit events under the configured prefix (default
-`[:hyparview]`):
+`[:hyparview]`). For raw `:telemetry` use:
 
 ```elixir
 :telemetry.attach_many(
@@ -176,7 +176,27 @@ All view changes emit events under the configured prefix (default
 )
 ```
 
-See `HyParView.Telemetry` for the full event catalog.
+For `:telemetry_metrics` users (Prometheus, StatsD, etc.), the library
+ships ready-made metric definitions:
+
+```elixir
+def deps do
+  [
+    {:hyparview, "~> 0.2"},
+    {:telemetry_metrics, "~> 1.0"},
+    {:telemetry_metrics_prometheus, "~> 1.1"}
+  ]
+end
+
+# In your supervision tree
+children = [
+  {TelemetryMetricsPrometheus, metrics: HyParView.Telemetry.Metrics.metrics()},
+  # ...
+]
+```
+
+See `HyParView.Telemetry` for the event catalog and
+`HyParView.Telemetry.Metrics` for the metric definitions.
 
 ## Custom transports
 

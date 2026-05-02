@@ -52,6 +52,10 @@ defmodule HyParView.MixProject do
   defp deps do
     [
       {:telemetry, "~> 1.3"},
+      # Optional: required only by `HyParView.Telemetry.Metrics` if users
+      # want pre-built metric definitions for a `telemetry_metrics_*`
+      # reporter. Not bundled into the runtime.
+      {:telemetry_metrics, "~> 1.0", optional: true},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
@@ -79,7 +83,8 @@ defmodule HyParView.MixProject do
       groups_for_modules: [
         Core: [HyParView, HyParView.Peer, HyParView.State],
         Server: [HyParView.Server, HyParView.Supervisor, HyParView.Application],
-        Transport: [HyParView.Transport, HyParView.Transport.TCP, HyParView.Transport.Test]
+        Transport: [HyParView.Transport, HyParView.Transport.TCP, HyParView.Transport.Test],
+        Telemetry: [HyParView.Telemetry, HyParView.Telemetry.Metrics]
       ]
     ]
   end
