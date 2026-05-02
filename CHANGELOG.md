@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed (breaking)
+
+- `HyParView.Transport` callback signature: `listen/2` now takes a 1-arity
+  `event_callback` instead of a 2-arity `deliver` callback. Events are
+  `{:message, peer, msg}` and `{:peer_lost, peer}`.
+
+### Added
+
+- `HyParView.Transport.TCP` now automatically signals `{:peer_lost, peer}`
+  when a TCP connection closes. The Server translates this into
+  `HyParView.State.connection_lost/2`, so reactive recovery (NEIGHBOR to a
+  passive peer) fires without applications having to call
+  `HyParView.connection_lost/2` themselves.
+
 ## [0.1.0] — 2026-05-02
 
 Initial release.
@@ -45,4 +61,5 @@ Initial release.
       down events, server restart (`ComprehensiveTest`)
     - Telemetry events under default and custom prefixes (`TelemetryTest`)
 
+[Unreleased]: https://github.com/b-erdem/hyparview/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/b-erdem/hyparview/releases/tag/v0.1.0

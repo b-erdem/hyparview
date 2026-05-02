@@ -35,15 +35,15 @@ defmodule HyParView.Connection do
   @typedoc "Internal data carried across states."
   @type data :: %__MODULE__{
           local_peer: Peer.t(),
-          deliver: HyParView.Transport.deliver(),
+          events: HyParView.Transport.event_callback(),
           transport: pid(),
           mode: :outbound | :inbound,
           remote_peer: Peer.t() | nil,
           socket: :inet.socket() | nil
         }
 
-  @enforce_keys [:local_peer, :deliver, :transport, :mode]
-  defstruct [:local_peer, :deliver, :transport, :mode, :remote_peer, :socket]
+  @enforce_keys [:local_peer, :events, :transport, :mode]
+  defstruct [:local_peer, :events, :transport, :mode, :remote_peer, :socket]
 
   # ── Public API ───────────────────────────────────────────────────────
 
@@ -171,7 +171,7 @@ defmodule HyParView.Connection do
   def connected(:info, {:tcp, sock, bytes}, %__MODULE__{socket: sock} = data) do
     case Protocol.decode(bytes) do
       {:ok, msg} ->
-        data.deliver.(data.remote_peer, msg)
+        data.events.({:message, data.remote_peer, msg})
 
       {:error, _reason} ->
         :ok
@@ -204,8 +204,10 @@ defmodule HyParView.Connection do
     end
   end
 
-  defp notify_closed(%__MODULE__{remote_peer: %Peer{id: id}, transport: tp}) do
-    send(tp, {:connection_closed, id})
+  defp notify_closed(%__MODULE__{remote_peer: %Peer{} = peer, transport: tp, events: events}) do
+    send(tp, {:connection_closed, peer.id})
+    events.({:peer_lost, peer})
+    :ok
   end
 
   defp notify_closed(_data), do: :ok

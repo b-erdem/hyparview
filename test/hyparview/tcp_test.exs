@@ -34,7 +34,14 @@ defmodule HyParView.TCPTest do
       config: [active_view_size: 4, shuffle_interval: 1_000_000]
     ]
 
-    start_supervised!({Server, Keyword.merge(default, opts)}, id: peer.id)
+    # `:temporary` so that killing a node in failure-detection tests doesn't
+    # trigger a supervisor-driven restart (which would re-JOIN and confuse
+    # state assertions).
+    start_supervised!(%{
+      id: peer.id,
+      start: {Server, :start_link, [Keyword.merge(default, opts)]},
+      restart: :temporary
+    })
   end
 
   describe "two-node TCP handshake" do
@@ -83,7 +90,7 @@ defmodule HyParView.TCPTest do
   end
 
   describe "TCP failure detection" do
-    test "killing a node leaves the surviving contact running" do
+    test "killing a node auto-triggers connection_lost on its peer" do
       contact = tcp_peer("fail-c")
       a = tcp_peer("fail-a")
 
@@ -94,26 +101,32 @@ defmodule HyParView.TCPTest do
 
       assert :ok = wait_for_active([contact_pid, a_pid], fn av -> av != [] end, 2_000)
 
-      # Subscriber inbox may already have :peer_up; drain it.
+      # Drain the :peer_up event from the join.
       receive do
         {:hyparview, {:peer_up, _}} -> :ok
       after
-        100 -> :ok
+        200 -> :ok
       end
 
-      # Hard-kill `a`. Its TCP connection breaks; the contact's Connection
-      # process detects {:tcp_closed, _} and notifies the contact's transport,
-      # which removes the entry. The protocol-level `connection_lost` is
-      # *not* automatically triggered by the transport in v0.1 — applications
-      # must call `HyParView.connection_lost/2` when they observe a failure.
-      # Here we exercise the kill+TCP-close path and assert the contact
-      # survives the cascade. CaptureLog silences the expected SIGKILL noise.
+      # Kill `a`. Its outbound TCP closes; the contact's `Connection` reads
+      # `{:tcp_closed, _}`, calls the events callback with `{:peer_lost, a}`,
+      # which the Server translates into `State.connection_lost(a)` —
+      # the protocol-level repair fires automatically. CaptureLog silences
+      # the expected SIGKILL noise.
       capture_log(fn ->
         Process.exit(a_pid, :kill)
-        Process.sleep(50)
+        Process.sleep(150)
       end)
 
       assert Process.alive?(contact_pid)
+
+      # The :peer_down event must arrive at the subscriber.
+      assert_receive {:hyparview, {:peer_down, %Peer{id: down_id}}}, 1_000
+      assert down_id == a.id
+
+      # And `a` must be gone from the active view.
+      remaining = contact_pid |> HyParView.active_view() |> Enum.map(& &1.id)
+      refute a.id in remaining
     end
   end
 end

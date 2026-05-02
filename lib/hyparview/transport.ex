@@ -40,19 +40,32 @@ defmodule HyParView.Transport do
   @type state :: term()
 
   @typedoc """
-  A function the transport calls when an inbound message is received,
-  framed as `{from_peer, message}`. The server receives this as a
-  process message.
+  An event the transport raises to its host:
+
+    * `{:message, from_peer, message}` — an inbound HyParView message.
+    * `{:peer_lost, peer}` — the transport has detected that an
+      established connection to `peer` is gone (TCP close, timeout, etc.).
+      The host can use this to trigger reactive recovery without the
+      application having to call `HyParView.connection_lost/2` manually.
   """
-  @type deliver :: (Peer.t(), Messages.t() -> :ok)
+  @type event ::
+          {:message, Peer.t(), Messages.t()}
+          | {:peer_lost, Peer.t()}
+
+  @typedoc """
+  A function the transport calls for every inbound event. The host
+  registers it via `c:listen/2`.
+  """
+  @type event_callback :: (event() -> :ok)
 
   @doc """
-  Open a listening endpoint at `local_peer.address`. `deliver` is the
-  callback the transport must invoke for each inbound message.
+  Open a listening endpoint at `local_peer.address`. `events` is the
+  callback the transport must invoke for each inbound event.
 
   Returns the transport's opaque state on success.
   """
-  @callback listen(local_peer :: Peer.t(), deliver()) :: {:ok, state()} | {:error, term()}
+  @callback listen(local_peer :: Peer.t(), event_callback()) ::
+              {:ok, state()} | {:error, term()}
 
   @doc """
   Send `message` to `target` peer over the transport.
@@ -70,4 +83,7 @@ defmodule HyParView.Transport do
   Close the transport, releasing any sockets/processes owned by it.
   """
   @callback close(state()) :: :ok
+
+  @typedoc "Backwards-compatibility alias. Prefer `event_callback/0`."
+  @type deliver :: event_callback()
 end

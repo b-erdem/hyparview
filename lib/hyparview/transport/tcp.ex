@@ -20,20 +20,20 @@ defmodule HyParView.Transport.TCP do
     3. Outbound: `c:HyParView.Transport.send_message/3` looks up an existing
        Connection by peer id; if none, starts an outbound Connection. The
        send is postponed inside the Connection until handshake completes.
-    4. On TCP close, the Connection notifies the transport, which removes
-       it from the registry. The Server receives this as a `connection_lost`
-       through its delivery callback (a separate signal — see notes).
+    4. On TCP close, the Connection emits `{:peer_lost, peer}` through the
+       events callback registered at `c:HyParView.Transport.listen/2`, which
+       the Server translates into `HyParView.State.connection_lost/2`. The
+       protocol-level repair (NEIGHBOR to a passive peer) fires automatically.
 
-  ## Notes & limitations (v0.1)
+  ## Notes & limitations
 
     * No reconnection logic. If a connection breaks, the protocol layer
       handles repair via NEIGHBOR.
     * No connection auth. Authentication and TLS are out of scope; wrap
       this transport (or replace it) for those concerns.
     * A peer that simultaneously initiates *and* accepts a connection from
-      the same counterpart will get two parallel connections; we keep the
-      first one observed and let the second drop on idle. Acceptable for
-      v0.1; refine with a pickier handshake later.
+      the same counterpart will get two parallel connections; the second
+      one drops on idle. A pickier handshake could resolve this.
   """
 
   @behaviour HyParView.Transport
@@ -50,8 +50,8 @@ defmodule HyParView.Transport.TCP do
         }
 
   @impl HyParView.Transport
-  def listen(%Peer{} = local_peer, deliver) when is_function(deliver, 2) do
-    case GenServer.start_link(__MODULE__, %{local_peer: local_peer, deliver: deliver}) do
+  def listen(%Peer{} = local_peer, events) when is_function(events, 1) do
+    case GenServer.start_link(__MODULE__, %{local_peer: local_peer, events: events}) do
       {:ok, pid} -> {:ok, %{pid: pid, address: local_peer.address}}
       {:error, _} = err -> err
     end
@@ -76,7 +76,7 @@ defmodule HyParView.Transport.TCP do
   # ── GenServer ───────────────────────────────────────────────────────
 
   @impl GenServer
-  def init(%{local_peer: peer, deliver: deliver}) do
+  def init(%{local_peer: peer, events: events}) do
     Process.flag(:trap_exit, true)
     {ip, port} = peer.address
 
@@ -96,7 +96,7 @@ defmodule HyParView.Transport.TCP do
         {:ok,
          %{
            local_peer: peer,
-           deliver: deliver,
+           events: events,
            listener: listener,
            accept_pid: accept_pid,
            connections: %{},
@@ -132,7 +132,7 @@ defmodule HyParView.Transport.TCP do
     case Connection.start_link_inbound(
            socket: socket,
            local_peer: state.local_peer,
-           deliver: state.deliver,
+           events: state.events,
            transport: self()
          ) do
       {:ok, conn_pid} ->
@@ -211,7 +211,7 @@ defmodule HyParView.Transport.TCP do
     case Connection.start_link_outbound(
            local_peer: state.local_peer,
            remote_peer: target,
-           deliver: state.deliver,
+           events: state.events,
            transport: self()
          ) do
       {:ok, conn_pid} ->

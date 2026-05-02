@@ -38,8 +38,8 @@ defmodule HyParView.Transport.Test do
   def child_spec(_), do: Registry.child_spec(keys: :unique, name: @registry)
 
   @impl HyParView.Transport
-  def listen(%Peer{address: address}, deliver) when is_function(deliver, 2) do
-    case Registry.register(@registry, address, deliver) do
+  def listen(%Peer{address: address}, events) when is_function(events, 1) do
+    case Registry.register(@registry, address, events) do
       {:ok, _owner} -> {:ok, %{address: address}}
       {:error, _} = err -> err
     end
@@ -48,8 +48,8 @@ defmodule HyParView.Transport.Test do
   @impl HyParView.Transport
   def send_message(_state, %Peer{address: address} = from, %_{} = message) do
     case Registry.lookup(@registry, address) do
-      [{_pid, deliver}] ->
-        deliver.(from, message)
+      [{_pid, events}] ->
+        events.({:message, from, message})
         :ok
 
       [] ->
@@ -72,8 +72,8 @@ defmodule HyParView.Transport.Test do
   @spec deliver_to(Peer.address(), Peer.t(), Messages.t()) :: :ok | {:error, :not_listening}
   def deliver_to(address, %Peer{} = from, message) do
     case Registry.lookup(@registry, address) do
-      [{_pid, deliver}] ->
-        deliver.(from, message)
+      [{_pid, events}] ->
+        events.({:message, from, message})
         :ok
 
       [] ->

@@ -25,13 +25,9 @@ The result: bounded per-node connection cost, fast failure detection (TCP),
 and high reliability under massive node churn — the paper demonstrates >90%
 delivery with 95% of nodes failed.
 
-## Status
-
-> **Pre-release.** v0.1.0 is feature-complete and tested. Not yet on hex.pm.
-
 ## Installation
 
-Once published, add to `mix.exs`:
+Add to `mix.exs`:
 
 ```elixir
 def deps do

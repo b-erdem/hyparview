@@ -19,9 +19,6 @@ defmodule HyParView.State do
     * `{:notify_down, peer}` — `peer` was removed from the active view.
     * `{:send, peer, message}` — send `message` to `peer` over the transport.
 
-  In milestone 2 only the `notify_*` actions are emitted; protocol messages
-  appear once JOIN/FORWARD_JOIN/etc. handlers land.
-
   ## Invariants
 
   Every public function preserves these invariants:

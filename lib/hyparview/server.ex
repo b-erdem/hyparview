@@ -158,9 +158,9 @@ defmodule HyParView.Server do
     Process.set_label({HyParView.Server, peer.id})
 
     me = self()
-    deliver = fn from_peer, msg -> send(me, {:transport_message, from_peer, msg}) && :ok end
+    events = build_event_callback(me)
 
-    case transport.listen(peer, deliver) do
+    case transport.listen(peer, events) do
       {:ok, transport_state} ->
         Process.send_after(self(), :shuffle_tick, config.shuffle_interval)
 
@@ -188,6 +188,11 @@ defmodule HyParView.Server do
   @impl GenServer
   def handle_info({:transport_message, _from_peer, msg}, internal) do
     {state, actions} = State.handle_message(internal.state, msg)
+    {:noreply, apply_actions(%{internal | state: state}, actions)}
+  end
+
+  def handle_info({:transport_peer_lost, peer}, internal) do
+    {state, actions} = State.connection_lost(internal.state, peer)
     {:noreply, apply_actions(%{internal | state: state}, actions)}
   end
 
@@ -237,6 +242,22 @@ defmodule HyParView.Server do
   end
 
   # ── Internals ───────────────────────────────────────────────────────
+
+  # Build the callback handed to `transport.listen/2`. Translates each
+  # transport event into an internal Erlang message destined for `me`
+  # (this server's pid).
+  @spec build_event_callback(pid()) :: HyParView.Transport.event_callback()
+  defp build_event_callback(me) do
+    fn
+      {:message, from_peer, msg} ->
+        send(me, {:transport_message, from_peer, msg})
+        :ok
+
+      {:peer_lost, peer} ->
+        send(me, {:transport_peer_lost, peer})
+        :ok
+    end
+  end
 
   defp drive_initial_join(internal, []), do: internal
 
