@@ -75,7 +75,7 @@ defmodule HyParView.MixProject do
     [
       main: "readme",
       source_ref: "v#{@version}",
-      extras: ["README.md", "CHANGELOG.md", "CONTRIBUTING.md"],
+      extras: ["README.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE"],
       groups_for_modules: [
         Core: [HyParView, HyParView.Peer, HyParView.State],
         Server: [HyParView.Server, HyParView.Supervisor, HyParView.Application],
