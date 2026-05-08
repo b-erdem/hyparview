@@ -25,7 +25,23 @@ defmodule HyParView.MixProject do
       source_url: @source_url,
       homepage_url: @source_url,
       dialyzer: dialyzer(),
-      aliases: aliases()
+      aliases: aliases(),
+      test_coverage: test_coverage()
+    ]
+  end
+
+  # Test-support modules (`test/support/`) are only compiled in `:test`
+  # and never shipped, so exclude them from the published coverage
+  # number — they otherwise dilute the average. Threshold reflects what
+  # the actual library code covers; defensive socket-error branches in
+  # `Transport.TCP` and `Connection` need fault injection we don't
+  # ship a harness for, so 85% is the honest floor.
+  defp test_coverage do
+    [
+      summary: [threshold: 85],
+      ignore_modules: [
+        ~r/^HyParView\.Test\..*$/
+      ]
     ]
   end
 

@@ -40,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   invariants across all seeds.
 - `HyParView.Test.Cluster` simulator extended with `partition/3`,
   `heal/1`, and `detect_lost/2` for partition-style integration tests.
+- `HyParView.ConnectionTest` — targeted error-path coverage for
+  `Connection`'s `decode_hello/1` (rejects empty/garbage frames,
+  unknown Hello version, term that isn't a `%Peer{}`, unsafe terms),
+  `outbound_connecting`'s connect-failure handling, and `parse_ip/1`
+  for the binary-IP form (covering both `Connection` and
+  `Transport.TCP` listen paths).
+- `mix.exs` adds `test_coverage: [summary: [threshold: 85],
+  ignore_modules: [~r/^HyParView\.Test\..*$/]]` so test-support
+  helpers don't dilute the coverage percentage. Library-only
+  coverage is now **88.86%** (up from 86.02%).
 
 ## [0.1.0] — 2026-05-02
 
