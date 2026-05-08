@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-08
+
 ### Fixed
 
 - **Race: late `NEIGHBOR_REPLY` re-adding a dead peer to the active
@@ -127,5 +129,6 @@ Initial release.
       down events, server restart (`ComprehensiveTest`)
     - Telemetry events under default and custom prefixes (`TelemetryTest`)
 
-[Unreleased]: https://github.com/b-erdem/hyparview/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/b-erdem/hyparview/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/b-erdem/hyparview/releases/tag/v0.2.0
 [0.1.0]: https://github.com/b-erdem/hyparview/releases/tag/v0.1.0
