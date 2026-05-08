@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `HyParView.State.connection_lost/2`, so reactive recovery (NEIGHBOR to a
   passive peer) fires without applications having to call
   `HyParView.connection_lost/2` themselves.
+- `TCP_NODELAY` (Nagle's algorithm disabled) is now set on every TCP
+  socket the Transport opens — listening, outbound `:gen_tcp.connect`,
+  and (explicitly, since Erlang doesn't propagate TCP-level options
+  from a listening socket to accepted sockets) on each accepted
+  socket via `Connection.start_receiving/1`. HyParView's protocol
+  messages are all small (JOIN, FORWARD_JOIN, NEIGHBOR, SHUFFLE);
+  without `nodelay`, every frame can wait up to 40ms for Nagle to
+  coalesce, dominating handshake and tail latency under multi-peer
+  load. This finding came out of profiling the
+  `hyparview_pubsub_bench` companion project.
 - `HyParView.subscribe/3` accepts a `:replay` option. When `replay: true`,
   the server immediately sends `{:hyparview, {:peer_up, peer}}` for every
   peer currently in the active view, before any future events. Useful for

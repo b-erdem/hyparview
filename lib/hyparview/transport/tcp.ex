@@ -85,6 +85,7 @@ defmodule HyParView.Transport.TCP do
       packet: 4,
       active: false,
       reuseaddr: true,
+      nodelay: true,
       ip: parse_ip(ip)
     ]
 

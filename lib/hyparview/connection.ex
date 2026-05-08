@@ -122,7 +122,7 @@ defmodule HyParView.Connection do
   def outbound_connecting(:internal, :connect, data) do
     {ip, port} = data.remote_peer.address
 
-    opts = [:binary, packet: 4, active: false, send_timeout: 5_000]
+    opts = [:binary, packet: 4, active: false, nodelay: true, send_timeout: 5_000]
 
     case :gen_tcp.connect(parse_ip(ip), port, opts, 5_000) do
       {:ok, socket} ->
@@ -174,7 +174,13 @@ defmodule HyParView.Connection do
   end
 
   def handshaking({:call, from}, :start_receiving, %__MODULE__{socket: sock} = data) do
-    case :inet.setopts(sock, active: :once) do
+    # `nodelay` must be set explicitly on accepted sockets — Erlang
+    # does not propagate TCP-level options from the listening socket.
+    # Without this, every small frame waits up to 40ms for Nagle's
+    # algorithm; HyParView's protocol messages (JOIN, FORWARD_JOIN,
+    # NEIGHBOR, SHUFFLE) are all small, so this hurts handshake and
+    # tail latency disproportionately.
+    case :inet.setopts(sock, active: :once, nodelay: true) do
       :ok ->
         {:keep_state, data, [{:reply, from, :ok}]}
 
