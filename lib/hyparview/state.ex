@@ -113,8 +113,8 @@ defmodule HyParView.State do
     :active,
     :passive,
     :rng,
-    pending_repair: nil,
-    recently_lost: %MapSet{}
+    :recently_lost,
+    pending_repair: nil
   ]
 
   @doc """
