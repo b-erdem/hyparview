@@ -15,11 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `handle_neighbor_reply/2` accepted-branch added the now-dead peer
   back to the active view unconditionally, leaving every subsequent
   send to that peer broken until the failure detector fired again.
-  `State` now tracks the single most-recently-NEIGHBORed peer in
-  `state.repair_target`; replies from anyone else are dropped as
-  stale. Same validation applies to rejected replies.
+
+  `State` now keeps a small `recently_lost` deny-list of peer ids
+  evicted via `connection_lost/2`. The reply handler rejects only
+  replies whose sender is in that set; everything else is accepted
+  exactly as before, so the protocol's other paths (FORWARD_JOIN
+  TTL=0 add-active-with-handshake, NEIGHBOR-after-eviction
+  re-symmetrisation) still re-sync views via reply traffic. The
+  set is cleared on each `tick_shuffle/1` — well past any plausible
+  in-flight-reply window — and individual entries are cleared
+  whenever the same peer is later re-added to active legitimately.
+
   Found and reproduced by [Lockstep](https://hex.pm/packages/lockstep)
-  POS-strategy schedule exploration (iteration 1 / seed 1).
+  POS-strategy schedule exploration (iteration 1 / seed 1). The
+  initial fix used an allow-list (`repair_target`) that was too
+  strict and silently dropped legitimate replies in unrelated
+  multi-cycle scenarios; switched to a deny-list (`recently_lost`)
+  that targets only the H1 race.
 
 ### Changed (breaking)
 

@@ -104,64 +104,16 @@ defmodule HyParView.SymmetryTest do
             seed: {seed_a, seed_b, seed_a + seed_b}
           )
 
-        # The HyParView paper guarantees symmetry holds *eventually*
-        # via continuous SHUFFLE propagation. In a closed-world
-        # simulator with finite rounds, some `StreamData`-generated
-        # initial graphs require many rounds — and a few never fully
-        # converge under the default config because shuffle's bounded
-        # TTL doesn't always reach a "stuck" pair before some other
-        # mechanism (eviction churn, JOINs, leaves) would have broken
-        # them apart in a real cluster.
-        #
-        # Rather than asserting absolute symmetry — which would be
-        # asserting a property the simulator cannot uphold for every
-        # input — we assert *strong-eventual progress*: shuffles
-        # monotonically drive asymmetry toward zero, and either reach
-        # it or leave a residual that's a small fraction of the
-        # initial. This is the honest version of the eventual-
-        # symmetry property under our closed-world simulator.
-        initial_asymmetry = length(asymmetric_pairs(cluster))
-
+        # Run 5 rounds of shuffles to allow further propagation.
         cluster =
-          Enum.reduce_while(1..50, cluster, fn _, c ->
+          Enum.reduce(1..5, cluster, fn _, c ->
             c = tick_all_shuffles(c)
             {_status, c} = Cluster.run_to_quiescence(c)
-
-            case asymmetric_pairs(c) do
-              [] -> {:halt, c}
-              _ -> {:cont, c}
-            end
+            c
           end)
 
-        final_asymmetry = length(asymmetric_pairs(cluster))
-
-        # Two assertions:
-        #
-        # 1. Shuffles never *increase* asymmetry. This is the
-        #    monotone-progress guarantee we expect from the protocol.
-        # 2. If the initial asymmetry was non-trivial (>3 pairs),
-        #    shuffles drive it down by at least half. Tiny initial
-        #    asymmetries (1-3 pairs) can persist indefinitely in a
-        #    closed-world simulator because shuffle's bounded TTL
-        #    sometimes fails to reach a specific stuck pair — this
-        #    is harmless in a real cluster where ongoing churn
-        #    breaks such pairs apart anyway.
-        assert final_asymmetry <= initial_asymmetry,
-               """
-               Asymmetry INCREASED over shuffle rounds.
-               initial: #{initial_asymmetry}, final: #{final_asymmetry}
-               """
-
-        if initial_asymmetry > 3 do
-          reduction = (initial_asymmetry - final_asymmetry) / initial_asymmetry
-
-          assert reduction >= 0.5,
-                 """
-                 Substantial initial asymmetry but <50% reduction over 50 shuffle rounds.
-                 initial: #{initial_asymmetry}, final: #{final_asymmetry}
-                 reduction: #{Float.round(reduction * 100, 1)}%
-                 """
-        end
+        asymmetric = asymmetric_pairs(cluster)
+        assert asymmetric == []
       end
     end
   end

@@ -57,16 +57,34 @@ defmodule HyParView.State do
   @type pending_repair :: MapSet.t(Peer.id()) | nil
 
   @typedoc """
-  The single peer we most recently sent a NEIGHBOR to in the current
-  repair cycle — i.e. the peer whose `NEIGHBOR_REPLY` we're waiting on.
-  `nil` means no NEIGHBOR is in flight.
+  Set of peer ids that were recently declared lost via
+  `connection_lost/2` and that we therefore must NOT re-add via a
+  late `NEIGHBOR_REPLY`. This is a deny-list, not an allow-list:
+  most replies are accepted, only those from a *just-evicted* peer
+  are rejected.
 
-  This is what `handle_neighbor_reply/2` checks against to reject
-  stray / late replies (see issue #1). Without it, a `NEIGHBOR_REPLY`
-  arriving after the corresponding peer was declared lost via
-  `connection_lost/2` would re-add a dead peer to the active view.
+  Why a deny-list rather than an allow-list:
+
+  An allow-list (e.g. "only accept replies from peers we're currently
+  awaiting") would also drop legitimate replies that the protocol
+  relies on for *non-repair* paths — most importantly the
+  add-active-with-handshake path during FORWARD_JOIN at TTL=0,
+  whose reply is what restores symmetry when an eviction-during-
+  handshake race has briefly desynchronised the two views.
+
+  Lifecycle:
+
+    * `connection_lost/2` adds the lost peer's id.
+    * The set is cleared on `tick_shuffle/1` — the H1 race window is
+      narrow (the gap between connection_lost and the in-flight
+      reply landing); by the time the next shuffle round fires
+      whatever replies were going to arrive have arrived.
+    * `add_to_active/2` removes a peer's id when they're added back
+      legitimately via JOIN / FORWARD_JOIN / Neighbor request — so a
+      peer that was lost and then properly re-joined isn't blocked
+      from later NeighborReply traffic.
   """
-  @type repair_target :: Peer.t() | nil
+  @type recently_lost :: MapSet.t(Peer.id())
 
   @typedoc "An action the caller must execute."
   @type action ::
@@ -85,7 +103,7 @@ defmodule HyParView.State do
           passive: %{Peer.id() => Peer.t()},
           rng: rng(),
           pending_repair: pending_repair(),
-          repair_target: repair_target()
+          recently_lost: recently_lost()
         }
 
   @enforce_keys [:self, :config, :active, :passive, :rng]
@@ -96,7 +114,7 @@ defmodule HyParView.State do
     :passive,
     :rng,
     pending_repair: nil,
-    repair_target: nil
+    recently_lost: %MapSet{}
   ]
 
   @doc """
@@ -132,7 +150,7 @@ defmodule HyParView.State do
       passive: %{},
       rng: rng,
       pending_repair: nil,
-      repair_target: nil
+      recently_lost: MapSet.new()
     }
   end
 
@@ -191,7 +209,12 @@ defmodule HyParView.State do
         state = remove_from_passive_silent(state, peer)
         {state, evict_actions} = maybe_evict_active(state)
         active = Map.put(state.active, peer.id, peer)
-        state = %{state | active: active}
+        # If this peer was previously in `recently_lost` (e.g.
+        # connection was lost briefly, then re-established via JOIN
+        # / FORWARD_JOIN / NEIGHBOR), legitimate re-adds clear the
+        # entry so future replies from them aren't blocked.
+        recently_lost = MapSet.delete(state.recently_lost, peer.id)
+        state = %{state | active: active, recently_lost: recently_lost}
         {state, evict_actions ++ [{:notify_up, peer}]}
     end
   end
@@ -306,6 +329,15 @@ defmodule HyParView.State do
   """
   @spec tick_shuffle(t()) :: {t(), actions()}
   def tick_shuffle(%__MODULE__{} = state) do
+    # Clear the recently-lost set on every shuffle round: the H1
+    # in-flight-reply window is much shorter than the shuffle
+    # interval, so by the time a shuffle fires whatever stale
+    # `NEIGHBOR_REPLY` was going to arrive has either arrived or
+    # been lost to network. Bounding `recently_lost`'s lifetime here
+    # keeps the deny-list from growing unboundedly across long
+    # uptime.
+    state = %{state | recently_lost: MapSet.new()}
+
     case map_size(state.active) do
       0 ->
         {state, []}
@@ -338,6 +370,12 @@ defmodule HyParView.State do
   @spec connection_lost(t(), Peer.t()) :: {t(), actions()}
   def connection_lost(%__MODULE__{} = state, %Peer{} = peer) do
     if in_active?(state, peer) do
+      # Mark the peer as recently lost so a stale, in-flight
+      # `NEIGHBOR_REPLY` from them doesn't re-add a dead peer (H1
+      # race in #1). The marker is cleared on the next
+      # `tick_shuffle/1`, well past any plausible in-flight-reply
+      # window.
+      state = %{state | recently_lost: MapSet.put(state.recently_lost, peer.id)}
       {state, [{:notify_down, _} = down]} = remove_from_active(state, peer)
       {state, repair_actions} = attempt_repair(state)
       {state, [down | repair_actions]}
@@ -492,45 +530,38 @@ defmodule HyParView.State do
   # NEIGHBOR_REPLY — accepted: clear pending repair and add the replier to
   # active view. Rejected: track the rejecter and try another passive peer.
   #
-  # Both branches validate the reply against `state.repair_target` — the
-  # single peer we most recently sent a NEIGHBOR to. A reply from anyone
-  # else is treated as stale (the corresponding NEIGHBOR was either
-  # superseded by a fresher repair attempt, or never sent at all, e.g.
-  # the responding peer was declared lost via `connection_lost/2`
-  # before the reply arrived). Stale replies are dropped without
-  # touching the active view — without this validation, a late
-  # `NeighborReply{accepted?: true}` from a peer that's already been
-  # connection-lost would unconditionally re-add a dead peer to the
-  # active view (issue #1).
+  # Both branches reject replies from peers in `state.recently_lost`
+  # — i.e. peers that were just declared lost via
+  # `connection_lost/2`. A late reply from such a peer would
+  # otherwise re-add a dead peer to the active view (the H1 race in
+  # #1).
+  #
+  # Replies from any *other* peer are accepted unconditionally. This
+  # preserves the symmetry-restoring behaviour the protocol relies on
+  # for non-repair NEIGHBOR exchanges (e.g. the
+  # add-active-with-handshake path during FORWARD_JOIN at TTL=0,
+  # whose reply re-syncs an eviction-during-handshake race).
   @spec handle_neighbor_reply(t(), NeighborReply.t()) :: {t(), actions()}
   defp handle_neighbor_reply(state, %NeighborReply{peer: replier, accepted?: true}) do
-    if matches_repair_target?(state, replier) do
-      state = %{state | pending_repair: nil, repair_target: nil}
+    if MapSet.member?(state.recently_lost, replier.id) do
+      {state, []}
+    else
+      state = %{state | pending_repair: nil}
       {state, add_actions} = add_to_active(state, replier)
       {state, add_actions}
-    else
-      {state, []}
     end
   end
 
   defp handle_neighbor_reply(state, %NeighborReply{peer: rejecter, accepted?: false}) do
-    if matches_repair_target?(state, rejecter) do
+    if MapSet.member?(state.recently_lost, rejecter.id) do
+      {state, []}
+    else
       previous = state.pending_repair || MapSet.new()
       tried = MapSet.put(previous, rejecter.id)
-      state = %{state | pending_repair: tried, repair_target: nil}
+      state = %{state | pending_repair: tried}
       attempt_repair_excluding(state, tried)
-    else
-      {state, []}
     end
   end
-
-  @spec matches_repair_target?(t(), Peer.t()) :: boolean()
-  defp matches_repair_target?(%__MODULE__{repair_target: nil}, _peer), do: false
-
-  defp matches_repair_target?(%__MODULE__{repair_target: %Peer{id: id}}, %Peer{id: id}),
-    do: true
-
-  defp matches_repair_target?(_state, _peer), do: false
 
   # DISCONNECT — paper §4.2 Algorithm 1 + §4.3 (failure-detection repair):
   # remove sender from active, attempt repair *before* demoting, then
@@ -646,20 +677,15 @@ defmodule HyParView.State do
     {peer, %{state | rng: rng}}
   end
 
-  # Initiate a fresh repair attempt (resets the tried set and the
-  # outstanding NEIGHBOR target — any in-flight reply from a previous
-  # cycle is now stale and will be dropped by `handle_neighbor_reply/2`).
+  # Initiate a fresh repair attempt (resets the tried set).
   @spec attempt_repair(t()) :: {t(), actions()}
   defp attempt_repair(state) do
-    state = %{state | pending_repair: nil, repair_target: nil}
+    state = %{state | pending_repair: nil}
     attempt_repair_excluding(state, MapSet.new())
   end
 
   # Pick a passive peer not in `excludes`, send a NEIGHBOR. Priority is
   # `:high` if active is empty, `:low` otherwise (paper §4.3).
-  #
-  # `repair_target` is set to the chosen passive peer so that
-  # `handle_neighbor_reply/2` can validate the eventual reply.
   @spec attempt_repair_excluding(t(), MapSet.t(Peer.id())) :: {t(), actions()}
   defp attempt_repair_excluding(state, excludes) do
     candidates =
@@ -669,13 +695,13 @@ defmodule HyParView.State do
 
     case candidates do
       [] ->
-        {%{state | pending_repair: nil, repair_target: nil}, []}
+        {%{state | pending_repair: nil}, []}
 
       list ->
         {n, rng} = :rand.uniform_s(length(list), state.rng)
         target = Enum.at(list, n - 1)
         tried = MapSet.put(excludes, target.id)
-        state = %{state | rng: rng, pending_repair: tried, repair_target: target}
+        state = %{state | rng: rng, pending_repair: tried}
         priority = if active_size(state) == 0, do: :high, else: :low
         msg = %Neighbor{peer: state.self, priority: priority}
         {state, [{:send, target, msg}]}
