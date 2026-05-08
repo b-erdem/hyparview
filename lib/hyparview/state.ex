@@ -56,6 +56,18 @@ defmodule HyParView.State do
   """
   @type pending_repair :: MapSet.t(Peer.id()) | nil
 
+  @typedoc """
+  The single peer we most recently sent a NEIGHBOR to in the current
+  repair cycle — i.e. the peer whose `NEIGHBOR_REPLY` we're waiting on.
+  `nil` means no NEIGHBOR is in flight.
+
+  This is what `handle_neighbor_reply/2` checks against to reject
+  stray / late replies (see issue #1). Without it, a `NEIGHBOR_REPLY`
+  arriving after the corresponding peer was declared lost via
+  `connection_lost/2` would re-add a dead peer to the active view.
+  """
+  @type repair_target :: Peer.t() | nil
+
   @typedoc "An action the caller must execute."
   @type action ::
           {:notify_up, Peer.t()}
@@ -72,11 +84,20 @@ defmodule HyParView.State do
           active: %{Peer.id() => Peer.t()},
           passive: %{Peer.id() => Peer.t()},
           rng: rng(),
-          pending_repair: pending_repair()
+          pending_repair: pending_repair(),
+          repair_target: repair_target()
         }
 
   @enforce_keys [:self, :config, :active, :passive, :rng]
-  defstruct [:self, :config, :active, :passive, :rng, pending_repair: nil]
+  defstruct [
+    :self,
+    :config,
+    :active,
+    :passive,
+    :rng,
+    pending_repair: nil,
+    repair_target: nil
+  ]
 
   @doc """
   Build a new state for the local node `self_peer`.
@@ -110,7 +131,8 @@ defmodule HyParView.State do
       active: %{},
       passive: %{},
       rng: rng,
-      pending_repair: nil
+      pending_repair: nil,
+      repair_target: nil
     }
   end
 
@@ -469,19 +491,46 @@ defmodule HyParView.State do
 
   # NEIGHBOR_REPLY — accepted: clear pending repair and add the replier to
   # active view. Rejected: track the rejecter and try another passive peer.
+  #
+  # Both branches validate the reply against `state.repair_target` — the
+  # single peer we most recently sent a NEIGHBOR to. A reply from anyone
+  # else is treated as stale (the corresponding NEIGHBOR was either
+  # superseded by a fresher repair attempt, or never sent at all, e.g.
+  # the responding peer was declared lost via `connection_lost/2`
+  # before the reply arrived). Stale replies are dropped without
+  # touching the active view — without this validation, a late
+  # `NeighborReply{accepted?: true}` from a peer that's already been
+  # connection-lost would unconditionally re-add a dead peer to the
+  # active view (issue #1).
   @spec handle_neighbor_reply(t(), NeighborReply.t()) :: {t(), actions()}
   defp handle_neighbor_reply(state, %NeighborReply{peer: replier, accepted?: true}) do
-    state = %{state | pending_repair: nil}
-    {state, add_actions} = add_to_active(state, replier)
-    {state, add_actions}
+    if matches_repair_target?(state, replier) do
+      state = %{state | pending_repair: nil, repair_target: nil}
+      {state, add_actions} = add_to_active(state, replier)
+      {state, add_actions}
+    else
+      {state, []}
+    end
   end
 
   defp handle_neighbor_reply(state, %NeighborReply{peer: rejecter, accepted?: false}) do
-    previous = state.pending_repair || MapSet.new()
-    tried = MapSet.put(previous, rejecter.id)
-    state = %{state | pending_repair: tried}
-    attempt_repair_excluding(state, tried)
+    if matches_repair_target?(state, rejecter) do
+      previous = state.pending_repair || MapSet.new()
+      tried = MapSet.put(previous, rejecter.id)
+      state = %{state | pending_repair: tried, repair_target: nil}
+      attempt_repair_excluding(state, tried)
+    else
+      {state, []}
+    end
   end
+
+  @spec matches_repair_target?(t(), Peer.t()) :: boolean()
+  defp matches_repair_target?(%__MODULE__{repair_target: nil}, _peer), do: false
+
+  defp matches_repair_target?(%__MODULE__{repair_target: %Peer{id: id}}, %Peer{id: id}),
+    do: true
+
+  defp matches_repair_target?(_state, _peer), do: false
 
   # DISCONNECT — paper §4.2 Algorithm 1 + §4.3 (failure-detection repair):
   # remove sender from active, attempt repair *before* demoting, then
@@ -597,15 +646,20 @@ defmodule HyParView.State do
     {peer, %{state | rng: rng}}
   end
 
-  # Initiate a fresh repair attempt (resets the tried set).
+  # Initiate a fresh repair attempt (resets the tried set and the
+  # outstanding NEIGHBOR target — any in-flight reply from a previous
+  # cycle is now stale and will be dropped by `handle_neighbor_reply/2`).
   @spec attempt_repair(t()) :: {t(), actions()}
   defp attempt_repair(state) do
-    state = %{state | pending_repair: nil}
+    state = %{state | pending_repair: nil, repair_target: nil}
     attempt_repair_excluding(state, MapSet.new())
   end
 
   # Pick a passive peer not in `excludes`, send a NEIGHBOR. Priority is
   # `:high` if active is empty, `:low` otherwise (paper §4.3).
+  #
+  # `repair_target` is set to the chosen passive peer so that
+  # `handle_neighbor_reply/2` can validate the eventual reply.
   @spec attempt_repair_excluding(t(), MapSet.t(Peer.id())) :: {t(), actions()}
   defp attempt_repair_excluding(state, excludes) do
     candidates =
@@ -615,13 +669,13 @@ defmodule HyParView.State do
 
     case candidates do
       [] ->
-        {%{state | pending_repair: nil}, []}
+        {%{state | pending_repair: nil, repair_target: nil}, []}
 
       list ->
         {n, rng} = :rand.uniform_s(length(list), state.rng)
         target = Enum.at(list, n - 1)
         tried = MapSet.put(excludes, target.id)
-        state = %{state | rng: rng, pending_repair: tried}
+        state = %{state | rng: rng, pending_repair: tried, repair_target: target}
         priority = if active_size(state) == 0, do: :high, else: :low
         msg = %Neighbor{peer: state.self, priority: priority}
         {state, [{:send, target, msg}]}

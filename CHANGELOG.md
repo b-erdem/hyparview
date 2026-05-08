@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Race: late `NEIGHBOR_REPLY` re-adding a dead peer to the active
+  view** (#1). When `connection_lost/2` evicted a peer between a
+  NEIGHBOR being sent and its reply arriving, the
+  `handle_neighbor_reply/2` accepted-branch added the now-dead peer
+  back to the active view unconditionally, leaving every subsequent
+  send to that peer broken until the failure detector fired again.
+  `State` now tracks the single most-recently-NEIGHBORed peer in
+  `state.repair_target`; replies from anyone else are dropped as
+  stale. Same validation applies to rejected replies.
+  Found and reproduced by [Lockstep](https://hex.pm/packages/lockstep)
+  POS-strategy schedule exploration (iteration 1 / seed 1).
+
 ### Changed (breaking)
 
 - `HyParView.Transport` callback signature: `listen/2` now takes a 1-arity

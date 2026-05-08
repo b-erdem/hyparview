@@ -163,7 +163,13 @@ defmodule HyParView.RecoveryTest do
       state = fresh_state()
       replier = Peer.new("replier", :addr)
       state = fill_passive(state, [replier])
-      state = %{state | pending_repair: MapSet.new([replier.id])}
+      # `repair_target` must match the replier — otherwise the reply
+      # is treated as stale and dropped (issue #1).
+      state = %{
+        state
+        | pending_repair: MapSet.new([replier.id]),
+          repair_target: replier
+      }
 
       msg = %NeighborReply{peer: replier, accepted?: true}
       {state, _actions} = State.handle_message(state, msg)
@@ -171,6 +177,23 @@ defmodule HyParView.RecoveryTest do
       assert State.in_active?(state, replier)
       refute State.in_passive?(state, replier)
       assert state.pending_repair == nil
+      assert state.repair_target == nil
+    end
+
+    test "accepted: stale reply (no in-flight target) is dropped, active view untouched" do
+      # Regression for issue #1: a NEIGHBOR_REPLY arriving when no
+      # NEIGHBOR is in flight (e.g., because the original target was
+      # declared lost via `connection_lost/2` between send and reply)
+      # must NOT add the replier to the active view.
+      state = fresh_state()
+      stranger = Peer.new("stranger", :addr)
+
+      # Note: no `repair_target` set, no `pending_repair`.
+      msg = %NeighborReply{peer: stranger, accepted?: true}
+      {state, actions} = State.handle_message(state, msg)
+
+      refute State.in_active?(state, stranger)
+      assert actions == []
     end
 
     test "rejected: tries another passive peer, accumulates tried set" do
@@ -178,13 +201,15 @@ defmodule HyParView.RecoveryTest do
       a = Peer.new("a", :addr)
       b = Peer.new("b", :addr)
       state = fill_passive(state, [a, b])
-      state = %{state | pending_repair: MapSet.new([a.id])}
+      state = %{state | pending_repair: MapSet.new([a.id]), repair_target: a}
 
       msg = %NeighborReply{peer: a, accepted?: false}
       {state, actions} = State.handle_message(state, msg)
 
       # Pending repair should now include both
       assert state.pending_repair == MapSet.new([a.id, b.id])
+      # And the new repair target should be `b`
+      assert state.repair_target == b
 
       # And we should have sent NEIGHBOR to b
       assert [{:send, ^b, %Neighbor{}}] = for({:send, _, %Neighbor{}} = act <- actions, do: act)
@@ -194,12 +219,13 @@ defmodule HyParView.RecoveryTest do
       state = fresh_state()
       a = Peer.new("a", :addr)
       state = fill_passive(state, [a])
-      state = %{state | pending_repair: MapSet.new([a.id])}
+      state = %{state | pending_repair: MapSet.new([a.id]), repair_target: a}
 
       msg = %NeighborReply{peer: a, accepted?: false}
       {state, actions} = State.handle_message(state, msg)
 
       assert state.pending_repair == nil
+      assert state.repair_target == nil
       refute Enum.any?(actions, &match?({:send, _, %Neighbor{}}, &1))
     end
   end
