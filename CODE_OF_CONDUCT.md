@@ -24,7 +24,7 @@ Examples of unacceptable behaviour include:
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behaviour may be
-reported to the project maintainer at `baris@erdem.dev`. All complaints will
+reported to the project maintainer at `brserdem@proton.me`. All complaints will
 be reviewed and investigated promptly and fairly.
 
 The full Contributor Covenant 2.1 text is available at
